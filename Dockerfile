@@ -1,43 +1,47 @@
+
 #
 # Composer Dependencies
 #
-FROM composer:2 as composer
+FROM composer:2 AS composer
 WORKDIR /var/www/html
 COPY composer.json composer.lock ./
-RUN composer install --ignore-platform-reqs --no-scripts --no-autoloader --prefer-dist --no-dev --no-interaction
+ARG DEBUG=off
+RUN composer install --no-interaction --no-plugins --no-scripts --prefer-dist --ignore-platform-reqs $(if [ "$DEBUG" = "off" ]; then echo "--no-dev"; fi)
 
 #
 # Runtime
 #
-FROM serversideup/php:8.1-fpm-nginx
+FROM serversideup/php:8.4-fpm-nginx
+
+# Environment variables
+ENV SSL_MODE=off
+ENV AUTORUN_ENABLED=true
+ENV AUTORUN_LARAVEL_MIGRATION_ISOLATION=true
 
 # Install PHP extensions
 USER root
-
-RUN install-php-extensions bcmath calendar exif gd intl pdo_pgsql \
-    && pecl install excimer \
-    && docker-php-ext-enable excimer
-
-# COPY .docker/zzz-custom-php.ini /usr/local/etc/php/conf.d/
-# COPY --chown=www-data:www-data .docker/horizon.sh ./horizon.sh
-# COPY --chown=www-data:www-data .docker/cron.sh ./cron.sh
-# RUN chmod +x ./horizon.sh
-# RUN chmod +x ./cron.sh
+RUN install-php-extensions bcmath calendar exif gd intl pdo_pgsql
+COPY .docker/zzz-custom-php.ini /usr/local/etc/php/conf.d/
 
 # Switch to www-data user for security
 USER www-data
 
 # Set working directory
 WORKDIR /var/www/html
-# Copy application files and installed dependencies
-# COPY .docker/nginx/supervisord.conf /etc/supervisord.conf
 
-COPY --from=composer /usr/bin/composer /usr/bin/composer
-COPY --chown=www-data --from=composer /var/www/html/vendor ./vendor
-COPY --chown=www-data:www-data ./ ./
+# Copy application files and installed dependencies
+COPY --from=composer --chown=www-data:www-data /var/www/html ./
+COPY --chown=www-data:www-data . ./
+
+# Copy custom NGINX config (to disable IPv6)
+COPY .docker/nginx/laravel.conf /etc/nginx/sites-enabled/default.conf
+
+COPY .docker/nginx-patched/http.conf /etc/nginx/site-opts.d/http.conf
+COPY .docker/nginx-patched/http.conf.template /etc/nginx/site-opts.d/http.conf.template
+COPY .docker/nginx-patched/ssl-full /etc/nginx/sites-available/ssl-full
 
 # Run necessary commands
-# RUN composer dump-autoload \
-#     && composer clear-cache 
-    # && php artisan livewire:publish --assets \
-    # && php artisan filament:assets
+RUN composer dump-autoload \
+    && composer clear-cache \
+    && php artisan livewire:publish --assets \
+    && chmod 660 secrets/oauth/oauth-private.key secrets/oauth/oauth-public.key
